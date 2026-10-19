@@ -1,0 +1,12 @@
+{
+  "name": "vibe-next-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Static-only corpus fixture (Next.js patterns) for reprove",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "next": "14.2.5",
+    "openai": "^4.60.0",
+    "react": "18.3.1"
+  }
+}

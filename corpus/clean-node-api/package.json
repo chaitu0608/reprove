@@ -1,0 +1,13 @@
+{
+  "name": "vibe-shop-api-secure",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Hardened control app for reprove (same features, no seeded flaws)",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "lodash": "4.17.21"
+  }
+}

@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.10", "3.13", "3.14"]
+        include:
+          - os: macos-latest
+            python: "3.14"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Tests (static rules, live exploit proof, full prove→patch→re-prove loop)
+        run: python -m pytest tests/ -q
+
+      - name: Dogfood — hardened control corpus must stay clean (exit 0)
+        run: reprove scan corpus/clean-node-api
+
+      - name: Dogfood — vulnerable corpus must be caught (exit 2)
+        run: |
+          set +e
+          reprove scan corpus/vuln-node-api > /dev/null
+          code=$?
+          set -e
+          if [ "$code" -ne 2 ]; then
+            echo "expected exit 2 (confirmed high+ findings), got $code"
+            exit 1
+          fi

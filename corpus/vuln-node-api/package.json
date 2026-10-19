@@ -1,0 +1,14 @@
+{
+  "name": "vibe-shop-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Deliberately vulnerable corpus app for reprove (do not deploy)",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "lodash": "4.17.15",
+    "expres": "^4.18.0"
+  }
+}

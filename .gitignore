@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+
+# Reprove outputs & sandbox artifacts
+reprove-out/
+.reprove-sandbox.log
+.reprove/
+
+# Node (corpus apps are dependency-free by design)
+node_modules/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
