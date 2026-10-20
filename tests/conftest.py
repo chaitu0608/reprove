@@ -1,10 +1,17 @@
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 CORPUS = REPO / "corpus"
+
+# src-layout bootstrap: tests run straight from a checkout, with or without
+# an editable install (and regardless of filesystem quirks that can disable it).
+_SRC = str(REPO / "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 
 @pytest.fixture()

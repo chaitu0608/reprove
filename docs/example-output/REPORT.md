@@ -1,0 +1,207 @@
+========================================================================
+REPROVE AUDIT — /Users/chaitu0608/Desktop/Projects/reprove/corpus/vuln-node-api
+========================================================================
+
+Reprove scan: /Users/chaitu0608/Desktop/Projects/reprove/corpus/vuln-node-api
+files: 6 · duration: 0.34s · 🟡 1 medium · ⚪ 1 low · 🟠 6 high · 🔴 8 critical
+dynamic pass: two-user probe on live app · 0 note(s)
+
+🔴 [CRIT] `/api/admin/users` responds to anonymous callers  (PROVEN)
+   rule: access-control/admin-endpoint-open · at: GET /api/admin/users
+   what you shipped: GET /api/admin/users with no token returned HTTP 200. The path looks administrative, so either it leaks data to anyone who guesses it or performs privileged actions anonymously. The live response is captured as evidence.
+   senior fix:       Require authentication server-side AND an explicit admin/role check — authentication alone is not authorization. Test every admin route as an anonymous caller in CI.
+   evidence:         [http-exchange] anonymous GET /api/admin/users → 200; body excerpt: {"users":[{"id":"u1","email":"reprove.a.rp-99ef931799@example.org","role":"member"},{"id":"u2","email":"reprove.b.rp-99ef931799@example.org","role":"member"}],"total":2}
+   exploit:          reproducible (1 steps): Anonymous GET /api/admin/users succeeds
+
+🔴 [CRIT] IDOR confirmed: user B can read user A's data via GET /api/orders/o3  (PROVEN)
+   rule: access-control/idor-confirmed · at: GET /api/orders/o3
+   what you shipped: Reprove created account A, stored a marker resource, then signed in as a different account B and fetched A's resource by its id: HTTP 200 with A's data in the body. The handler fetches by id without verifying ownership — the classic IDOR that leaks every user's data to every other user.
+   senior fix:       Scope the fetch to the caller: append an ownership filter (`AND user_id = :current_user` / `.eq('user_id', user.id)`) and return 404 on mismatch. Add an RLS policy `USING (auth.uid() = user_id)` as a database-level backstop so a future query mistake cannot re-open the hole.
+   evidence:         [http-exchange] user B GET /api/orders/o3 → 200; body excerpt: {"id":"o3","userId":"u1","item":"RP-99ef931799","createdAt":"2026-10-20T09:36:48.795Z"}
+   exploit:          reproducible (4 steps): User B reads user A's resource at /api/orders/o3
+
+🔴 [CRIT] Environment file committed to the repository: .env  (PROVEN)
+   rule: secrets/committed-env · at: .env
+   what you shipped: `.env` is checked into version control with 4 variable(s): STRIPE_SECRET_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OPENAI_API_KEY. Everything in it is available to anyone with repo access — and git history keeps it even after deletion.
+   senior fix:       Delete the file, purge it from git history (git filter-repo or BFG), add `.env` to .gitignore, commit a `.env.example` with blank values instead, and ROTATE every credential that was in the file — deletion does not un-leak anything.
+   evidence:         [code] committed env file; keys: STRIPE_SECRET_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OPENAI_API_KEY
+
+🔴 [CRIT] OpenAI API key exposed (client)  (PROVEN)
+   rule: secrets/openai-key · at: public/config.js:6
+   what you shipped: A OpenAI API key is hardcoded at `public/config.js:6` (file is served statically from public/config.js). This value ships to every visitor's browser — anyone can open devtools and use it. Detected value (masked): `sk-proj-…N8oP`
+   senior fix:       Move the usage behind a server-side endpoint (API route, edge function, or backend handler), reference it via a server-only environment variable, and ROTATE the credential immediately — removing the string does not un-expose it. If this powered an LLM call from the browser, proxy the call through your server so the key never ships.
+   evidence:         [code] OpenAI API key; exposure=client; file is served statically from public/config.js
+
+🔴 [CRIT] Supabase service_role key exposed  (PROVEN)
+   rule: secrets/supabase-service-role · at: .env:3
+   what you shipped: A Supabase `service_role` JWT is present at `.env:3` (committed in the repository (.env)). This key BYPASSES ROW LEVEL SECURITY ENTIRELY — even if your policies are perfect, anyone holding it can read, modify, and delete every row in every table. 
+   senior fix:       Remove the key from the code, rotate it in Supabase → Project Settings → API (rotation invalidates the leaked key), and keep service-role usage exclusively inside trusted server/edge functions behind authentication.
+   evidence:         [code] JWT payload contains "role": "service_role"; exposure=repo
+
+🔴 [CRIT] Supabase service_role key exposed  (PROVEN)
+   rule: secrets/supabase-service-role · at: public/config.js:5
+   what you shipped: A Supabase `service_role` JWT is present at `public/config.js:5` (file is served statically from public/config.js). This key BYPASSES ROW LEVEL SECURITY ENTIRELY — even if your policies are perfect, anyone holding it can read, modify, and delete every row in every table. It is exposed to every visitor of the deployed app. 
+   senior fix:       Remove the key from the code, rotate it in Supabase → Project Settings → API (rotation invalidates the leaked key), and keep service-role usage exclusively inside trusted server/edge functions behind authentication.
+   evidence:         [code] JWT payload contains "role": "service_role"; exposure=client
+
+🔴 [CRIT] Admin endpoint /api/admin/users handled without an auth check  (LIKELY)
+   rule: authz/node-admin-route-no-auth · at: server.js:108
+   what you shipped: The block handling `/api/admin/users` at `server.js:108` has no auth call in its first lines. Admin surfaces are the highest-value target in any app — an unauthenticated one is usually the whole breach.
+   senior fix:       Check the caller before doing any work: resolve the session token, 401 when absent, and verify an admin role — not just presence of a session.
+   evidence:         [code] req.url block for /api/admin/users with no auth call within the handler preamble
+
+🔴 [CRIT] Supabase table `orders` has RLS disabled  (LIKELY)
+   rule: rls/table-without-rls · at: supabase/migrations/0001_init.sql:1
+   what you shipped: `public.orders` is defined at `supabase/migrations/0001_init.sql:1` and never gets `ENABLE ROW LEVEL SECURITY`. With RLS off, Supabase's public (anon) key — which is designed to be public and ships in every frontend — can read and modify this table through the auto-generated REST API. If this table stores anything user-specific, it is world-readable right now.
+   senior fix:       Add a migration enabling RLS and scoped policies: `ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;` then `CREATE POLICY "orders_own" ON public.orders FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);`
+   evidence:         [sql] CREATE TABLE public.orders with no matching ENABLE ROW LEVEL SECURITY; columns: id, user_id, item, created_at
+
+🟠 [HIGH] `orders.find(...)` looks up by id only  (LIKELY)
+   rule: idor/in-memory-find-by-id · at: server.js:144
+   what you shipped: At `server.js:144` a record is looked up by id with no ownership clause (`&& row.userId === user.id`). Whoever supplies the id gets the row.
+   senior fix:       Add the ownership clause to the lookup or check ownership right after fetching and 404 on mismatch. Reprove's IDOR fixer appends the ownership condition when it can identify the user variable.
+   evidence:         [code] lookup: orders.find((o) => o.id === id
+
+🟠 [HIGH] SQL built by string concatenation  (LIKELY)
+   rule: injection/sql-string-concat · at: server.js:154
+   what you shipped: At `server.js:154` a SQL statement is assembled from string pieces that include request-provided input. An attacker controls the query: `' OR 1=1 --` reads every row; stacked queries and UNIONs do worse. Excerpt: `"SELECT * FROM orders WHERE item LIKE '%" + q`
+   senior fix:       Use parameterized queries: pass values separately (`db.query('… WHERE name = $1', [name])`) so the driver escapes them. Never interpolate input into SQL text. Reprove's fixer rewrites simple concat shapes to parameterized form.
+   evidence:         [code] concatenated SQL expression: "SELECT * FROM orders WHERE item LIKE '%" + q
+
+🟠 [HIGH] RLS policy `profiles_select_all` on `profiles` allows everyone  (LIKELY)
+   rule: rls/permissive-policy · at: supabase/migrations/0001_init.sql:22
+   what you shipped: Policy `profiles_select_all` on `public.profiles` (supabase/migrations/0001_init.sql:22) is permissive: it matches every row for every caller (`USING (true)` or no predicate). RLS is technically enabled, but this policy punches a hole straight through it.
+   senior fix:       Scope the policy to the owner: `DROP POLICY IF EXISTS "profiles_select_all" ON public.profiles;` then `CREATE POLICY "profiles_select_all_scoped" ON public.profiles FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);`
+   evidence:         [sql] policy expression: for select using (true)
+
+🟠 [HIGH] OpenAI API key exposed (repo)  (LIKELY)
+   rule: secrets/openai-key · at: .env:4
+   what you shipped: A OpenAI API key is hardcoded at `.env:4` (committed in the repository (.env)). It is stored in source control, where it lives in git history forever. Detected value (masked): `sk-proj-…N8oP`
+   senior fix:       Move the usage behind a server-side endpoint (API route, edge function, or backend handler), reference it via a server-only environment variable, and ROTATE the credential immediately — removing the string does not un-expose it. If this powered an LLM call from the browser, proxy the call through your server so the key never ships.
+   evidence:         [code] OpenAI API key; exposure=repo; committed in the repository (.env)
+
+🟠 [HIGH] Stripe secret key exposed (repo)  (LIKELY)
+   rule: secrets/stripe-secret · at: .env:1
+   what you shipped: A Stripe secret key is hardcoded at `.env:1` (committed in the repository (.env)). It is stored in source control, where it lives in git history forever. Detected value (masked): `sk_live_…X8yB`
+   senior fix:       Move the usage behind a server-side endpoint (API route, edge function, or backend handler), reference it via a server-only environment variable, and ROTATE the credential immediately — removing the string does not un-expose it. If this powered an LLM call from the browser, proxy the call through your server so the key never ships.
+   evidence:         [code] Stripe secret key; exposure=repo; committed in the repository (.env)
+
+🟠 [HIGH] Package `expres` closely resembles `express`  (POSSIBLE)
+   rule: deps/typosquat-suspicion · at: package.json
+   what you shipped: `expres` in `package.json` is within edit-distance of the popular package `express` and is not itself well-known. Typosquatted packages are a common supply-chain attack — the name looks right at a glance but runs someone else's code.
+   senior fix:       Verify the import is intentional. If you meant `express`, change it; if not, audit what `expres` does before shipping.
+   evidence:         [registry] declared dependency `expres@^4.18.0` ≈ popular package `express`
+
+🟡 [MED ] CORS allows any origin  (LIKELY)
+   rule: config/cors-wildcard · at: server.js:27
+   what you shipped: At `server.js:27` the server accepts requests from every origin (wildcard CORS). Any website a logged-in user visits can silently call this API with their cookies/tokens.
+   senior fix:       Allowlist your real frontend origin(s) from an environment variable, e.g. `origin: process.env.ALLOWED_ORIGIN`. Never combine a wildcard with credentials.
+   evidence:         [code] CORS wildcard: Access-Control-Allow-Origin": "*"
+
+⚪ [LOW ] Server entry point lacks basic hardening  (LIKELY)
+   rule: config/server-hygiene-gaps · at: server.js:1
+   what you shipped: `server.js` starts an HTTP API but has no sign of: security headers (helmet / Content-Security-Policy), rate limiting on the API. Individually minor; together they are the difference between a rough day and a breach.
+   senior fix:       Add `helmet()` (or set CSP/nosniff/HSTS headers), and rate-limit auth + LLM endpoints (`express-rate-limit`, 5–20 req/min per IP).
+   evidence:         [code] missing: security headers (helmet / Content-Security-Policy), rate limiting on the API
+
+------------------------------------------------------------------------
+PATCHES PROPOSED
+------------------------------------------------------------------------
+  [manual] Manual fix required: `/api/admin/users` responds to anonymous callers
+        no automated fix template for this rule yet
+        
+        Recommended fix:
+        Require authentication server-side AND an explicit admin/role check — authentication alone is not authorization. Test every admin route as an anonymous caller in CI.
+  [manual] Manual fix required: IDOR confirmed: user B can read user A's data via GET /api/orders/o3
+        no automated fix template for this rule yet
+        
+        Recommended fix:
+        Scope the fetch to the caller: append an ownership filter (`AND user_id = :current_user` / `.eq('user_id', user.id)`) and return 404 on mismatch. Add an RLS policy `USING (auth.uid() = user_id)` as a database-level backstop so a future query mistake cannot re-open the hole.
+  [auto] Remove committed .env, add .env.example and .gitignore rules. ROTATE the leaked keys.
+        Deleting the file does NOT un-leak its values: rotate every credential that was in it, and purge the file from git history before making the repo public.
+  [auto] Remove the exposed secret from public/config.js:6
+        The value is removed from source, but it was already exposed: rotate it now. If a client-side feature depended on it, proxy that call through your server.
+  [manual] Manual fix required: Supabase service_role key exposed
+        this secret lives in a committed env file — use the `secrets/committed-env` fix (delete file + .env.example + rotation)
+        
+        Recommended fix:
+        Remove the key from the code, rotate it in Supabase → Project Settings → API (rotation invalidates the leaked key), and keep service-role usage exclusively inside trusted server/edge functions behind authentication.
+  [auto] Remove the exposed secret from public/config.js:5
+        The value is removed from source, but it was already exposed: rotate it now. If a client-side feature depended on it, proxy that call through your server.
+  [auto] Require auth on admin block in server.js
+        This closes anonymous access. Consider also adding a role check — authentication is not authorization.
+  [auto] Add RLS lockdown migration for `public.orders`
+        Review the generated policy before applying: it assumes rows are owned via `user_id`. Run it against a staging database first (supabase db push / migration runner).
+  [auto] Scope id lookup to the authenticated user in server.js
+        The lookup now requires row.userId === user.id. Adapt the ownership field (`userId`) if your schema names it differently.
+  [auto] Parameterize SQL query `sql` in server.js
+        The query now uses a `?` placeholder with values passed separately as `sqlParams`. Check your database driver's parameter binding syntax (`?`, `$1`, or `:name`) — adjust if it differs.
+  [auto] Scope permissive policy `profiles_select_all` on `public.profiles`
+        Verify the owner column assumption (user_id) against your schema before applying.
+  [manual] Manual fix required: OpenAI API key exposed (repo)
+        this secret lives in a committed env file — use the `secrets/committed-env` fix (delete file + .env.example + rotation)
+        
+        Recommended fix:
+        Move the usage behind a server-side endpoint (API route, edge function, or backend handler), reference it via a server-only environment variable, and ROTATE the credential immediately — removing the string does not un-expose it. If this powered an LLM call from the browser, proxy the call through your server so the key never ships.
+  [manual] Manual fix required: Stripe secret key exposed (repo)
+        this secret lives in a committed env file — use the `secrets/committed-env` fix (delete file + .env.example + rotation)
+        
+        Recommended fix:
+        Move the usage behind a server-side endpoint (API route, edge function, or backend handler), reference it via a server-only environment variable, and ROTATE the credential immediately — removing the string does not un-expose it. If this powered an LLM call from the browser, proxy the call through your server so the key never ships.
+  [manual] Manual fix required: Package `expres` closely resembles `express`
+        no automated fix template for this rule yet
+        
+        Recommended fix:
+        Verify the import is intentional. If you meant `express`, change it; if not, audit what `expres` does before shipping.
+  [auto] Restrict CORS origin in server.js
+        Set ALLOWED_ORIGIN in your production environment to your real frontend URL.
+  [manual] Manual fix required: Server entry point lacks basic hardening
+        no automated fix template for this rule yet
+        
+        Recommended fix:
+        Add `helmet()` (or set CSP/nosniff/HSTS headers), and rate-limit auth + LLM endpoints (`express-rate-limit`, 5–20 req/min per IP).
+
+------------------------------------------------------------------------
+VERIFICATION — a fix counts only when it is proven
+------------------------------------------------------------------------
+  ✅ verified           `/api/admin/users` responds to anonymous callers
+      the recorded exploit no longer works against the patched app
+      proof: anonymous_access: GET http://127.0.0.1:65467/api/admin/users → 401
+      proof: final response body: {"error":"unauthorized"}
+  ✅ verified           IDOR confirmed: user B can read user A's data via GET /api/orders/o3
+      the recorded exploit no longer works against the patched app
+      proof: signup_a: POST http://127.0.0.1:65467/api/auth/signup → 201
+      proof: signup_b: POST http://127.0.0.1:65467/api/auth/signup → 201
+  ✅ verified           Environment file committed to the repository: .env
+      re-scan no longer detects `secrets/committed-env` in .env
+  ✅ verified           OpenAI API key exposed (client)
+      re-scan no longer detects `secrets/openai-key` in public/config.js
+  ✅ verified           Supabase service_role key exposed
+      re-scan no longer detects `secrets/supabase-service-role` in .env
+  ✅ verified           Supabase service_role key exposed
+      re-scan no longer detects `secrets/supabase-service-role` in public/config.js
+  ✅ verified           Admin endpoint /api/admin/users handled without an auth check
+      re-scan no longer detects `authz/node-admin-route-no-auth` in server.js
+  ✅ verified           Supabase table `orders` has RLS disabled
+      re-scan no longer detects `rls/table-without-rls` in supabase/migrations/0001_init.sql
+  ✅ verified           `orders.find(...)` looks up by id only
+      re-scan no longer detects `idor/in-memory-find-by-id` in server.js
+  ✅ verified           SQL built by string concatenation
+      re-scan no longer detects `injection/sql-string-concat` in server.js
+  ✅ verified           RLS policy `profiles_select_all` on `profiles` allows everyone
+      re-scan no longer detects `rls/permissive-policy` in supabase/migrations/0001_init.sql
+  ✅ verified           OpenAI API key exposed (repo)
+      re-scan no longer detects `secrets/openai-key` in .env
+  ✅ verified           Stripe secret key exposed (repo)
+      re-scan no longer detects `secrets/stripe-secret` in .env
+  ✋ manual             Package `expres` closely resembles `express`
+      cannot be auto-verified (manual step required, e.g. key rotation)
+  ✅ verified           CORS allows any origin
+      re-scan no longer detects `config/cors-wildcard` in server.js
+  ✋ manual             Server entry point lacks basic hardening
+      manual fix guidance provided (no automated patch)
+
+  fixes: 14 verified · 0 still vulnerable · 0 broke build · 2 manual · 0 inconclusive
+
+Tip: `reprove audit <path> --apply` copies the repo, applies automated patches,
+boots the patched app, replays every exploit, and reports only proven fixes.

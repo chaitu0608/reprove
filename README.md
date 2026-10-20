@@ -19,6 +19,10 @@ generates a minimal patch, and **re-runs the exploit to prove the fix**.
 MCP-native: the coding agent that generated your app can call Reprove in-loop
 and heal it.
 
+**New here?** Read the [plain-English explainer](docs/EXPLAINER.md) — what it is,
+how every part works, and a guided tour of the repo. No security background
+needed.
+
 ---
 
 ## The gap Reprove fills
@@ -37,6 +41,7 @@ and heal it.
 git clone https://github.com/chaitu0608/reprove && cd reprove
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[mcp]"          # mcp extra enables the MCP server
+./scripts/doctor.sh               # optional: verify env + fix known macOS quirk
 
 reprove demo                      # the full loop on the bundled vulnerable app
 reprove scan  path/to/your/app    # static + live exploit proof
@@ -76,6 +81,11 @@ VERIFICATION — a fix counts only when it is proven
 Before → after, from the recorded replay: the IDOR `GET /api/orders/{id}`
 returns **404** for the wrong user, and the open admin route returns **401**.
 Not "patched" — *proven* patched, on a running instance of your app.
+
+**See it without running it:** the real artifacts from this run are checked in —
+[demo transcript](docs/example-output/demo-console.txt) ·
+[report](docs/example-output/REPORT.md) ·
+[fixes diff](docs/example-output/fixes.diff).
 
 ## How it works
 
@@ -164,6 +174,7 @@ reprove scan . --json > audit.json   # machine-readable, fails CI on confirmed h
 ## Tests & corpus
 
 ```bash
+./scripts/doctor.sh     # env check + test run (repairs a known macOS quirk)
 pytest tests/ -q        # 10 tests: static rules, live IDOR/admin proof,
                         # clean-control zero-exploits, MCP tools,
                         # and the full prove→patch→re-prove loop
@@ -182,6 +193,17 @@ Deliberately scoped in phases so every commit is shippable:
 
 Near-term: Docker-isolated sandbox, GitHub Action that comments verified fixes
 on PRs, tree-sitter/semgrep interop, live Supabase policy probing, PyPI release.
+
+## Troubleshooting
+
+**`ModuleNotFoundError: No module named 'reprove'` (macOS).** Python 3.14
+ignores `.pth` files carrying the macOS `UF_HIDDEN` flag, which can silently
+disable an editable install if a backup/sync tool flags the venv. Repair with
+`./scripts/doctor.sh` (or `chflags -R nohidden .venv`). Tests work without an
+editable install because `tests/conftest.py` adds `src/` to the path. Full notes:
+[docs/EXPLAINER.md §12](docs/EXPLAINER.md#12-troubleshooting).
+
+**Dynamic probes skipped.** Install Node.js ≥ 20; static analysis still works.
 
 ## Safety
 
